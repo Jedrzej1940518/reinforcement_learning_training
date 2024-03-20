@@ -1,4 +1,12 @@
 /.vscode
 /test
 /utils.py
-/__pycache__
+*__pycache__
+
+.conda
+
+/logs
+/frames
+/models
+/videos
+/test
