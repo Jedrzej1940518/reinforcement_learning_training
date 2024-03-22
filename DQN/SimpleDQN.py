@@ -53,7 +53,7 @@ class SimpleCNN(nn.Module):
                                         nn.ReLU(),
                                         nn.Conv2d(64, 64, kernel_size=3, stride=1),
                                         nn.ReLU(),
-                                        nn.Flatten(start_dim=1), #probably maxpool this first
+                                        nn.Flatten(start_dim=1), 
                                         nn.Linear(3136, 512),
                                         nn.ReLU(),
                                         nn.Linear(512, max_actions))
@@ -127,8 +127,8 @@ class SimpleDQN:
         env = gymnasium.wrappers.AtariPreprocessing(env, noop_max=30, frame_skip=2)
         env = gymnasium.wrappers.FrameStack(env, 4)
         env = gymnasium.wrappers.TransformObservation(env, lambda obs: torch.tensor(np.array(obs), dtype=torch.uint8).detach().to(device))
-        
         env = gymnasium.wrappers.RecordVideo(env, 'videos', episode_trigger=lambda x : x % video_frequency_episodes == 0)
+
         return env
 
     def __e_greedy(self, obs):
@@ -157,66 +157,8 @@ class SimpleDQN:
         self.estimator_model.load_state_dict(self.model.state_dict())
         for param in self.estimator_model.parameters():
             param.requires_grad = False
-    def __run_episodes(self, env, episodes, policy):
-    
-        cum_r = 0
-        for i in range(1, episodes+1):
-            obs, _ = env.reset()
-            done = False
-            live_lost = True
-            current_lives = 5
-            
-            while not done: 
-                if live_lost:
-                    obs, r, done, trunc, _ = env.step(1) #we're firing after losin life or start of an episode
-                    live_lost = False
-                a = policy(obs)
-                obs, r, done, trunc, _ = env.step(translate_action(a))
-                if env.unwrapped.ale.lives() < current_lives:
-                    current_lives -=1
-                    live_lost = True
-                    r = -1 #punish dying
-
-                done = done or trunc
-                r = min(r, 1)   #clip reward
-                cum_r +=r
-        
-        return cum_r
    
-    def __calculate_baselines(self, env, episodes):
-        print("Calculating baselines")
-        #random action
-        random_cum_r = self.__run_episodes(env, episodes, lambda _ : random.randint(0, max_actions-1))
-        print("Random baseline calculated")
-
-        #maximizing action
-        max_mean_a = -10
-        max_a = -1
-        for a in range(max_actions):
-            a_cum_r = self.__run_episodes(env, episodes, lambda _ : a)
-            mean_a = a_cum_r / episodes
-            if mean_a > max_mean_a:
-                max_mean_a = mean_a
-                max_a = a
-        print("Max action baseline calculated")
-        #maximizing + random action
-        def policy(_):
-            if random.random() < 0.2:
-               return random.randint(0, max_actions-1)
-            return max_a
-        cum_max_a_rand = self.__run_episodes(env, episodes, policy)
-        mean_max_a_rand = cum_max_a_rand / episodes
-        
-        print("Max action epsilon baseline calculated")
-
-        with open('logs/baselines', 'w') as f:
-            f.write(f"Random action mean r: {random_cum_r / episodes}\n")
-            f.write(f"Max action mean r: {max_mean_a} \n")
-            f.write(f"Max action epsilon mean r: {mean_max_a_rand}\n")
-        
-        print("Baselines calculated")
-
-    def train(self, env, episodes, steps, calculate_baselines = False, epsilon_decay_steps =-1, starting_step = 1, update_frequency_steps = 4,log_interval = 100, export_interval = 100, video_frequency_episodes = 10000):
+    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, update_frequency_steps = 4,log_interval = 100, export_interval = 100, video_frequency_episodes = 10000):
                 
                 n = starting_step
                 end_epsilon = 0.1
@@ -224,9 +166,6 @@ class SimpleDQN:
                 epsilon_decay_step = (self.epsilon - end_epsilon) / epsilon_decay_steps
 
                 env = self.__wrap_env(env, video_frequency_episodes)
-
-                if calculate_baselines:
-                    self.__calculate_baselines(env, 50)
                 
                 for i in range(1, episodes+1):
                     done = False
@@ -362,7 +301,3 @@ class SimpleDQN:
         torch.save(self.model.state_dict(), f'models/{self.exported_models}_SimpleDQN_{mean_r}.pth')
         torch.save(self.model.state_dict(), f'SimpleDQN.pth') #save copy to base dir
         self.exported_models+=1
-
-#make bookeeping 
-#save and resume model
-#probably adjust TD error 

@@ -5,8 +5,8 @@
 /.vscode
 /test
 /utils.py
-/logs
-/frames
-/models
-/videos
-/test
+*/logs
+*/frames
+*/models
+*/videos
+*/test
