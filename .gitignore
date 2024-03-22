@@ -1,10 +1,10 @@
+*__pycache__
+*.pth
+.conda
+
 /.vscode
 /test
 /utils.py
-*__pycache__
-
-.conda
-
 /logs
 /frames
 /models
