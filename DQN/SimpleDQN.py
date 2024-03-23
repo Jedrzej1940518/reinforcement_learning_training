@@ -9,6 +9,7 @@ between 4 and 18
 '''
 
 from collections import deque
+import os
 import random
 
 import numpy as np
@@ -25,10 +26,10 @@ from PIL import Image
 from matplotlib import pyplot as plt
 import torchvision.utils as vutils
 from torchvision.transforms.functional import to_pil_image
+from utils.progress_bar import print_progress_bar
 ##debugging above
 
 device = 'cuda'
-max_actions = 3
 
 def save_frame(array, file_name):
     obs = np.array(array)
@@ -36,16 +37,11 @@ def save_frame(array, file_name):
         img = Image.fromarray(o, 'L')
         img.save(f'frames/{file_name}_{i}.png')  
 
-def translate_action(neural_network_action):
-    if neural_network_action >= 1:
-        return neural_network_action + 1
-    return neural_network_action
-
 def frames_to_tensor(frames):
     return frames.float().detach().to(device) / 255
 
 class SimpleCNN(nn.Module):
-    def __init__(self, device):
+    def __init__(self, max_actions):
         super(SimpleCNN, self).__init__()
         self.network = nn.Sequential(nn.Conv2d(4, 32, kernel_size=8, stride=4),
                                         nn.ReLU(),
@@ -71,6 +67,10 @@ class SimpleCNN(nn.Module):
 
         self.network = self.network.to(device)
         
+        
+
+
+
 
 
     def forward(self, x):
@@ -86,125 +86,120 @@ class SimpleCNN(nn.Module):
 class SimpleDQN:
 
 
-    def __init__(self, rb_size=3000, batch_size = 32, gamma = 0.95, lr = 0.00001, update_target_estimator_frequency = 500, resume = False, export_model = True):
+    def __init__(self, max_actions, log_path, rb_size=50_000, batch_size = 32, gamma = 0.99, lr = 0.00025, update_target_estimator_frequency = 2500, update_frequency_steps = 4, resume = False, export_model = True):
+        
+        self.max_actions = max_actions
 
         self.rb = []
-        
         self.gamma  = gamma
-
-        self.model = SimpleCNN(device=device).to(device)
-        self.estimator_model =  SimpleCNN(device=device).to(device)
-        for param in self.estimator_model.parameters(): #estimator doesnt need grads
-            param.requires_grad = False
+        self.model = SimpleCNN(max_actions).to(device)
 
         if resume:
-            self.model.load_state_dict(torch.load('SimpleDQN.pth'))
+            self.model.load_state_dict(torch.load(f'{log_path}/SimpleDQN.pth'))
 
-        self.optimizer = optim.RMSprop(self.model.parameters(), lr=lr)
+        self.estimator_model =  SimpleCNN(max_actions).to(device)
+        self._copy_model()
+
         self.epsilon = 1
-        self.batch_size = batch_size
-        self.export_model = export_model
-        self.update_target_estimator_frequency = update_target_estimator_frequency
-        
-        self.huber_loss = torch.nn.HuberLoss()
-
+        self.batch_size = batch_size        
         self.rb_max_len = rb_size
 
-        self.rollout_rs = deque(maxlen= 100)
-
+        self.update_target_estimator_frequency = update_target_estimator_frequency
+        self.update_frequency_steps = update_frequency_steps
+        
+        self.huber_loss = torch.nn.HuberLoss()
+        self.optimizer = optim.RMSprop(self.model.parameters(), lr=lr)
+        self.log_path = log_path
+        self.export_model = export_model
         self.exported_models = 0
         self.log_episode = False
 
-    def __wrap_env_test(self, env): #no recording
+        #logging dirs
+        os.makedirs(f'{self.log_path}/videos', exist_ok=True)
+        os.makedirs(f'{self.log_path}/frames', exist_ok=True)
+        os.makedirs(f'{self.log_path}/logs', exist_ok=True)
+        os.makedirs(f'{self.log_path}/models', exist_ok=True)
+        
+        with open(f'{self.log_path}/logs/stats.csv', 'w') as f:
+            f.write("rb_size, batch_size, gamma, lr, update_target_estimator_frequency, update_frequency_steps\n")
+            f.write(f'{rb_size},{batch_size},{gamma},{lr},{update_target_estimator_frequency},{update_frequency_steps}\n')
+            f.write("episode,step,epsilon,recent_mean_cum_r,recent_mean_q_val\n")
+
+
+    def _wrap_env_base(self, env): #no video recording
         env = gymnasium.wrappers.AtariPreprocessing(env, noop_max=30, frame_skip=2)
         env = gymnasium.wrappers.FrameStack(env, 4)
         env = gymnasium.wrappers.TransformObservation(env, lambda obs: torch.tensor(np.array(obs), dtype=torch.uint8).detach().to(device))
- 
+        env = gymnasium.wrappers.RecordEpisodeStatistics(env)
         return env
     
-    def __wrap_env(self, env, video_frequency_episodes):
-
-        env = gymnasium.wrappers.AtariPreprocessing(env, noop_max=30, frame_skip=2)
-        env = gymnasium.wrappers.FrameStack(env, 4)
-        env = gymnasium.wrappers.TransformObservation(env, lambda obs: torch.tensor(np.array(obs), dtype=torch.uint8).detach().to(device))
-        env = gymnasium.wrappers.RecordVideo(env, 'videos', episode_trigger=lambda x : x % video_frequency_episodes == 0)
+    def _wrap_env_video(self, env, video_interval):
+        env = self._wrap_env_base(env)
+        env = gymnasium.wrappers.RecordVideo(env, f'{self.log_path}/videos', episode_trigger=lambda x : x % video_interval == 0, disable_logger=True)
 
         return env
 
-    def __e_greedy(self, obs):
+    def _e_greedy(self, obs):
+
+        q_values = self.model(obs)
 
         if random.random() < self.epsilon:
-            return random.randint(0, max_actions-1)
-        
-        return self.__greedy(obs)
+            a =  random.randint(0, self.max_actions-1)
+        else:
+            a = torch.argmax(q_values, dim=1).item()
     
-    def __greedy(self, obs):
-        q_values = self.model(obs)
-        a =  torch.argmax(q_values, dim=1).item()
-        return a
+        return a, q_values[0][a].item() #returns action and q_val for logging purposes
     
-    def __action_batch(self, obs_tensor, actions):
+    def _action_batch(self, obs_tensor, actions):
         q_vals = self.model(obs_tensor)
         q_vals_of_actions = q_vals.gather(index=actions.unsqueeze(-1), dim=1)
         return q_vals_of_actions
 
-    def __greedy_batch(self, obs_tensor, model):
+    def _greedy_batch(self, obs_tensor, model):
         q_vals = model(obs_tensor).detach()
         q_max, _ = torch.max(q_vals, dim=1)
         return q_max 
     
-    def __copy_model(self):
+    def _copy_model(self):
         self.estimator_model.load_state_dict(self.model.state_dict())
         for param in self.estimator_model.parameters():
             param.requires_grad = False
    
-    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, update_frequency_steps = 4,log_interval = 100, export_interval = 100, video_frequency_episodes = 10000):
+    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, log_interval = 100, export_interval = 100, video_interval = 100):
                 
                 n = starting_step
                 end_epsilon = 0.1
                 epsilon_decay_steps = steps if epsilon_decay_steps == -1 else epsilon_decay_steps
                 epsilon_decay_step = (self.epsilon - end_epsilon) / epsilon_decay_steps
 
-                env = self.__wrap_env(env, video_frequency_episodes)
+                env = self._wrap_env_video(env, video_interval)
                 
-                for i in range(1, episodes+1):
+                q_values = deque(maxlen=5000)
+
+                for i in range(0, episodes):
                     done = False
 
                     obs, _ = env.reset()
-                    cum_r, cum_l = 0, 0
-                    
-                    current_lives = 5
-                    live_lost = True
                     logged_heavy = False #debugging
 
                     while not done and n <= steps: 
                         
-                        if live_lost:
-                            obs, r, done, trunc, _ = env.step(1) #we're firing after losin life or start of an episode
-                            live_lost = False
-
                         with torch.no_grad():
-                            a = self.__e_greedy(frames_to_tensor(obs))
-                            obs_n, r, done, trunc, _ = env.step(translate_action(a))
-                            
-                            if env.unwrapped.ale.lives() < current_lives:
-                                current_lives -=1
-                                live_lost = True
-                                r = -1 #punish dying
-
+                            a, q_val = self._e_greedy(frames_to_tensor(obs))
+                            obs_n, r, done, trunc, info = env.step(a)
                             done = done or trunc
+                            r /=10          #normalize reward
                             r = min(r, 1)   #clip reward
-                            
-                            cum_r+=r
-                            cum_l+=1
                             
                             if len(self.rb) < self.rb_max_len:
                                 self.rb.append((obs, a, r, obs_n, done))
                             else:
                                 indx = random.randint(0, len(self.rb)-1)
                                 self.rb[indx] = (obs, a, r, obs_n, done)
+                            
+                            q_values.append(q_val) #logging
                         
-                        if n % update_frequency_steps ==0:
+                        if n % self.update_frequency_steps ==0:
                             self.optimizer.zero_grad()
                             batch_size = min(self.batch_size, len(self.rb))
                             batch  = random.sample(self.rb, batch_size)
@@ -213,34 +208,29 @@ class SimpleDQN:
 
                             obs_tensor = frames_to_tensor(torch.stack(obs_list)).detach().to(device)
                             a_tensor =   torch.tensor(a_list, dtype=torch.int64).detach().to(device)
-                            r_tensor =   torch.tensor(r_list, dtype=torch.int64).detach().to(device)
+                            r_tensor =   torch.tensor(r_list, dtype=torch.float).detach().to(device)
                             obs_n_tensor = frames_to_tensor(torch.stack(obs_n_list)).detach().to(device)
                             done_tensor = torch.tensor(done_list, dtype=torch.bool).detach().to(device)
                             
-                            qval_tensor = self.__action_batch(obs_tensor, a_tensor)
-                            qval_n_tensor = self.__greedy_batch(obs_n_tensor, self.estimator_model).detach().to(device)
+                            qval_tensor = self._action_batch(obs_tensor, a_tensor)
+                            qval_n_tensor = self._greedy_batch(obs_n_tensor, self.estimator_model).detach().to(device)
                                 
                             target = torch.where(done_tensor, r_tensor, r_tensor + self.gamma * qval_n_tensor).detach()
 
-                            loss = self.huber_loss(qval_tensor.squeeze(), target) #this shoudl take mean automatically (i hope?)
-                            #loss = torch.pow(target - qval_tensor, 2)
-                            #loss = torch.mean(loss)
-                            loss.backward()
-                            #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0) #clip gradients, idk
-                        
+                            loss = self.huber_loss(qval_tensor.squeeze(), target) 
+                            loss.backward()                        
                             self.optimizer.step()
                         
                         if n % self.update_target_estimator_frequency == 0:
-                            print("\ncopying model weights to estimator\n")
-                            self.__copy_model()
-                        
+                            print("copying model weights to estimator")
+                            self._copy_model()
 
                         if self.log_episode and (not logged_heavy):
                             with torch.no_grad():
-                                print("\nlogging q_vals from replay buffer\n")
-                                with open('logs/q_vals.log', 'a') as f:
-                                    q_vals = self.model(obs_tensor)
-                                    f.write(f'episode: {i} | step: {n} \n{q_vals}\n')
+                                print("logging q_vals from replay buffer")
+                                with open(f'{self.log_path}/logs/q_vals.log', 'a') as f:
+                                    q_vals_last_batch = self.model(obs_tensor)
+                                    f.write(f'episode: {i} | step: {n} \n{q_vals_last_batch}\n')
 
                             logged_heavy = True
 
@@ -250,54 +240,56 @@ class SimpleDQN:
                         obs = obs_n
                         n+=1
 
-                    self.rollout_rs.append(cum_r)
-                    print(f"{i}: {n}/{steps} -> e: {self.epsilon:.3f} r: {cum_r}, l: {cum_l}, last_loss: {loss.item():.1e}")
-    
+                    recent_mean = (sum(env.return_queue) / len(env.return_queue))[0]
+                    recent_q_val = sum(q_values)/ len(q_values)
+
+                    print(f"{i}: {n}/{steps} e: {self.epsilon:.2f}, last loss: {loss.item():.1e}, cum_r: {info['episode']['r'][0]}, recent mean cum_r: {recent_mean:.1f}, q_val: {recent_q_val:.1f}")
+
                     self.log_episode = (i % log_interval == 0)
 
                     if self.log_episode:
-                        print(f"\nLOG| mean rollout last 100: {sum(self.rollout_rs)/len(self.rollout_rs)}\n")
+                         with open(f'{self.log_path}/logs/stats.csv', 'a') as f:
+                             f.write(f'{i},{n},{self.epsilon},{recent_mean},{recent_q_val}\n')
+
                     if self.export_model and i % export_interval == 0:
-                        self.export()
+                        self.export(recent_mean)
                     if n > steps:
+                        self.export(recent_mean)
                         break
 
+                    print_progress_bar(current_progress=(n/steps)*100) #fix this
 
-    def test(self, env, episodes = 10):
+
+    def test(self, env, episodes = 3):
 
         self.epsilon = 0.1
-        env = self.__wrap_env_test(env)
-        print("training start")
+        env = self._wrap_env_base(env)
+
         with torch.no_grad():
             for i in range(episodes):
 
                 obs, _ = env.reset()
                 done = False
                 
+                
+                current_lives = 5
+                live_lost = True
+
+                cum_sum = 0
+            
                 current_lives = 5
                 live_lost = True
 
                 cum_sum = 0
                 while not done:
-
-                    if live_lost:
-                        obs, r, done, trunc, _ = env.step(1) #we're firing after losin life or start of an episode
-                        live_lost = False
-
-                    a = self.__e_greedy(frames_to_tensor(obs))
-                    obs, r, done, trunc, _ = env.step(translate_action(a))
+                    a, _ = self._e_greedy(frames_to_tensor(obs))
+                    obs, r, done, trunc, info = env.step(a)
                     done = done or trunc
-                    cum_sum += r
 
-                    if env.unwrapped.ale.lives() < current_lives:
-                        current_lives -=1
-                        live_lost = True
+                print(f"{i} cum_r: ", info['episode']['r'][0])
 
-                print("Cumsum = ", cum_sum)
-
-    def export(self):
-        print("\nexporting model to a file \n")
-        mean_r = sum(self.rollout_rs)/len(self.rollout_rs)
-        torch.save(self.model.state_dict(), f'models/{self.exported_models}_SimpleDQN_{mean_r}.pth')
-        torch.save(self.model.state_dict(), f'SimpleDQN.pth') #save copy to base dir
+    def export(self, mean_r):
+        print(f"exporting model to a file - mean_r from last rollouts: {mean_r:.2f}")
+        torch.save(self.model.state_dict(), f'{self.log_path}/models/{self.exported_models}_SimpleDQN_{mean_r:.2f}.pth')
+        torch.save(self.model.state_dict(), f'{self.log_path}/SimpleDQN.pth') #save copy to base dir
         self.exported_models+=1

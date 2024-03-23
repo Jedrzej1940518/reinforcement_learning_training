@@ -1,12 +1,15 @@
 *__pycache__
 *.pth
-.conda
+*.conda
+*.vscode
+*logs
+*frames
+*models
+*videos
+*test
 
-/.vscode
-/test
-/utils.py
-*/logs
-*/frames
-*/models
-*/videos
-*/test
+###########################
+#         debug           #
+###########################
+
+*videos copy
