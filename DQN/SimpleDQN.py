@@ -164,8 +164,13 @@ class SimpleDQN:
         self.estimator_model.load_state_dict(self.model.state_dict())
         for param in self.estimator_model.parameters():
             param.requires_grad = False
-   
-    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, log_interval = 100, export_interval = 100, video_interval = 100):
+
+    def _dummy_info(self):
+        e_info = {"r": [0], "l": [1]}
+        info = {"episode": e_info}
+        return info
+
+    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, adaptable_exploration = False, log_interval = 100, export_interval = 100, video_interval = 100):
                 
                 n = starting_step
                 end_epsilon = 0.1
@@ -174,13 +179,15 @@ class SimpleDQN:
 
                 env = self._wrap_env_video(env, video_interval)
                 
-                q_values = deque(maxlen=5000)
+                q_values_recent = deque(maxlen=100)
+                last_mean = 0
 
                 for i in range(0, episodes):
                     done = False
 
                     obs, _ = env.reset()
                     logged_heavy = False #debugging
+                    q_values = 0
 
                     while not done and n <= steps: 
                         
@@ -196,8 +203,8 @@ class SimpleDQN:
                             else:
                                 indx = random.randint(0, len(self.rb)-1)
                                 self.rb[indx] = (obs, a, r, obs_n, done)
-                            
-                            q_values.append(q_val) #logging
+
+                            q_values+=q_val #logging
                         
                         if n % self.update_frequency_steps ==0:
                             self.optimizer.zero_grad()
@@ -240,22 +247,28 @@ class SimpleDQN:
                         obs = obs_n
                         n+=1
 
-                    recent_mean = (sum(env.return_queue) / len(env.return_queue))[0]
-                    recent_q_val = sum(q_values)/ len(q_values)
+                    if not 'episode' in info:
+                        print("\nGenerating FAKE DUMMY INFO dont trust next logs :)\n")
+                        info = self._dummy_info()
 
-                    print(f"{i}: {n}/{steps} e: {self.epsilon:.2f}, last loss: {loss.item():.1e}, cum_r: {info['episode']['r'][0]}, recent mean cum_r: {recent_mean:.1f}, q_val: {recent_q_val:.1f}")
+                    last_q_vals = q_values/ info['episode']['l'][0] #q values from last episode       
+                    q_values_recent.append(last_q_vals)
+
+                    print(f"{i}: {n}/{steps} e: {self.epsilon:.2f}, last loss: {loss.item():.1e}, cum_r: {info['episode']['r'][0]}, last mean cum_r: {last_mean:.1f}, last q_val: {last_q_vals:.1f}")
 
                     self.log_episode = (i % log_interval == 0)
 
                     if self.log_episode:
+                         last_mean =  (sum(env.return_queue) / len(env.return_queue))[0] 
+                         print(f"\nlast mean from {len(env.return_queue)} episodes: {last_mean:.2f}, mean q values from last {len(q_values_recent)} episodes : {sum(q_values_recent)/len(q_values_recent):.4f}\n")
                          with open(f'{self.log_path}/logs/stats.csv', 'a') as f:
-                             f.write(f'{i},{n},{self.epsilon},{recent_mean},{recent_q_val}\n')
+                             f.write(f'{i},{n},{self.epsilon},{last_mean},{sum(q_values_recent)/len(q_values_recent)}\n')
 
                     if self.export_model and i % export_interval == 0:
-                        self.export(recent_mean)
+                        self.export(last_mean)
                     if n > steps:
-                        self.export(recent_mean)
-                        break
+                        self.export(last_mean)
+                        return
 
                     print_progress_bar(current_progress=(n/steps)*100) #fix this
 
@@ -270,17 +283,7 @@ class SimpleDQN:
 
                 obs, _ = env.reset()
                 done = False
-                
-                
-                current_lives = 5
-                live_lost = True
 
-                cum_sum = 0
-            
-                current_lives = 5
-                live_lost = True
-
-                cum_sum = 0
                 while not done:
                     a, _ = self._e_greedy(frames_to_tensor(obs))
                     obs, r, done, trunc, info = env.step(a)
