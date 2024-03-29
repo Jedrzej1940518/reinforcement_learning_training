@@ -11,7 +11,5 @@
 ###########################
 #         debug           #
 ###########################
-
-*videos copy
-misc_resources
+*.mp4
 test.py

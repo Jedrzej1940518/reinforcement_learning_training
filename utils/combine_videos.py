@@ -8,9 +8,9 @@ import moviepy.video.fx.all as vfx
 from PIL import Image, ImageDraw, ImageFont
 
 
-directory = "repos/reinforcement_learning/DQN/Breakout/videos"
-output_dir = "repos/reinforcement_learning/DQN/Breakout"
-steps_total = 2_000_000
+directory = "/home/jedrzej/repos/reinforcement_learning/DQN/Breakout/videos"
+output_dir = "/home/jedrzej/repos/reinforcement_learning/"
+steps_total = 2515102
 
 def create_watermark(metadata, size=(200, 40), text_color=(255, 255, 255, 255), bg_color=(0, 0, 0, 128)):
     img = Image.new('RGBA', size, bg_color)
@@ -20,7 +20,7 @@ def create_watermark(metadata, size=(200, 40), text_color=(255, 255, 255, 255), 
     metadata_str = ", ".join(f"{key}: {value}" for key, value in metadata.items())
     #{"step_id": 55706, "episode_id": 150, "content_type": "video/mp4"}
     episode = metadata["episode_id"]
-    steps = metadata["step_id"] / 2_000_000 * 100
+    steps = metadata["step_id"] / steps_total * 100
     metadata_str = f"episode: {episode}, progress: {steps:.1f}%"
     #metadata_str = "whats up brother"  # For testing purposes
     d.text((40, 20), metadata_str, fill=text_color, font=font)
@@ -41,7 +41,7 @@ for video_file in sorted_video_files:
         metadata = json.load(f)
     
     clip = VideoFileClip(video_file)
-    clip = clip.fx(vfx.speedx, 1.25)  # Speed up by a factor of 2
+    clip = clip.fx(vfx.speedx, 0.8)  # slow down because we're doing alot of frame skippin
 
     watermark_img = create_watermark(metadata)
     watermark_img_path = video_file.replace('.mp4', '_watermark.png')

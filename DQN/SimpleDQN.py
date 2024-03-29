@@ -66,12 +66,6 @@ class SimpleCNN(nn.Module):
                     init.zeros_(m.bias)
 
         self.network = self.network.to(device)
-        
-        
-
-
-
-
 
     def forward(self, x):
         
@@ -90,7 +84,7 @@ class SimpleDQN:
         
         self.max_actions = max_actions
 
-        self.rb = []
+        self.rb = deque(maxlen=rb_size)
         self.gamma  = gamma
         self.model = SimpleCNN(max_actions).to(device)
 
@@ -102,13 +96,12 @@ class SimpleDQN:
 
         self.epsilon = 1
         self.batch_size = batch_size        
-        self.rb_max_len = rb_size
 
         self.update_target_estimator_frequency = update_target_estimator_frequency
         self.update_frequency_steps = update_frequency_steps
         
         self.huber_loss = torch.nn.HuberLoss()
-        self.optimizer = optim.RMSprop(self.model.parameters(), lr=lr)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.log_path = log_path
         self.export_model = export_model
         self.exported_models = 0
@@ -127,7 +120,7 @@ class SimpleDQN:
 
 
     def _wrap_env_base(self, env): #no video recording
-        env = gymnasium.wrappers.AtariPreprocessing(env, noop_max=30, frame_skip=2)
+        env = gymnasium.wrappers.AtariPreprocessing(env, noop_max=30, frame_skip=4)
         env = gymnasium.wrappers.FrameStack(env, 4)
         env = gymnasium.wrappers.TransformObservation(env, lambda obs: torch.tensor(np.array(obs), dtype=torch.uint8).detach().to(device))
         env = gymnasium.wrappers.RecordEpisodeStatistics(env)
@@ -170,7 +163,7 @@ class SimpleDQN:
         info = {"episode": e_info}
         return info
 
-    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, adaptable_exploration = False, log_interval = 100, export_interval = 100, video_interval = 100):
+    def train(self, env, episodes, steps, epsilon_decay_steps =-1, starting_step = 1, log_interval = 100, export_interval = 100, video_interval = 100):
                 
                 n = starting_step
                 end_epsilon = 0.1
@@ -188,21 +181,24 @@ class SimpleDQN:
                     obs, _ = env.reset()
                     logged_heavy = False #debugging
                     q_values = 0
+                    current_lives = 5
+                    done = False
 
-                    while not done and n <= steps: 
+                    while n <= steps and (not done): 
                         
                         with torch.no_grad():
                             a, q_val = self._e_greedy(frames_to_tensor(obs))
                             obs_n, r, done, trunc, info = env.step(a)
+                            
+                            died = env.ale.lives() < current_lives
+                            if died:
+                                current_lives -=1
+
                             done = done or trunc
                             r /=10          #normalize reward
                             r = min(r, 1)   #clip reward
                             
-                            if len(self.rb) < self.rb_max_len:
-                                self.rb.append((obs, a, r, obs_n, done))
-                            else:
-                                indx = random.randint(0, len(self.rb)-1)
-                                self.rb[indx] = (obs, a, r, obs_n, done)
+                            self.rb.append((obs, a, r, obs_n, died))
 
                             q_values+=q_val #logging
                         
