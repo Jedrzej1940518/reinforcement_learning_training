@@ -6,7 +6,7 @@ from utils.calculate_baselines import calculate_baselines
 import torch.nn.init as init
 
 obs_space_lunar = 8
-a_space_lunar = 2
+a_space_lunar = 4
 
 class SplitActivationLayer(nn.Module):
     def __init__(self, input_features, output_features):
