@@ -55,8 +55,8 @@ default_actor_lunar.apply(init_weights)
 
 def train():
     env = gym.make('LunarLander-v2', render_mode = "rgb_array")
-    ppo = SimplePPO(default_actor_lunar, default_critic_lunar, "PPO/LunarLander", debug=True, target_device='cpu')
-    ppo.train(env, 5000, export_model=True)
+    ppo = SimplePPO(default_actor_lunar, default_critic_lunar, "PPO/LunarLander", debug=False, target_device='cpu')
+    ppo.train(env, 5000, export_model=True, resume=True)
     
 def write_baselines():
     env = gym.make('LunarLander-v2', render_mode = "rgb_array")

@@ -1,6 +1,8 @@
 
 #https://arxiv.org/pdf/1707.06347.pdf
 
+#todo add entropy bonus
+
 from collections import deque
 import os
 import random
@@ -32,7 +34,7 @@ class Critic(nn.Module):
         v_n = self.forward(obs_n)
         v_n = v_n.squeeze()
         target_values = torch.where(terminal, r, r+self.discount*v_n)
-        debug_log(f"target_v| rewards: {r[:8]}, v_n: {v_n[:8]}, target_v: {target_values[:8]}, terminal? {terminal[:8]}")
+        debug_log(lambda: f"target_v| rewards: {r[:8]}, v_n: {v_n[:8]}, target_v: {target_values[:8]}, terminal? {terminal[:8]}")
         return target_values
 
 class Actor(nn.Module):
@@ -78,16 +80,17 @@ class SimplePPO:
         self.video_interval = video_interval
         global debug_log
         self.debug = debug
-        debug_log = lambda msg, file = 'debug' : self._debug_log(msg, file)
+        #this take msg lambda to prevent evaluating the string if no debug flag is active
+        debug_log = lambda msg_lambda, file = 'debug' : self._debug_log(msg_lambda, file)
         
         os.makedirs(f'{self.log_path}/logs', exist_ok=True)
         os.makedirs(f'{self.log_path}/videos', exist_ok=True)
         os.makedirs(f'{self.log_path}/models/critic', exist_ok=True)
         os.makedirs(f'{self.log_path}/models/actor', exist_ok=True)
         
-        debug_log("\n............................Another run happening............................\n")
-        debug_log(f"device: {device}, horizon: {horizon}, epochs: {epochs}, minibatch_size: {minibatch_size}, clip: {clip}\n")
-        debug_log(f"discount: {discount}, gae: {gae}, actor_lr: {actor_lr}, critic_lr: {critic_lr}\n")
+        debug_log(lambda: "\n............................Another run happening............................\n")
+        debug_log(lambda: f"device: {device}, horizon: {horizon}, epochs: {epochs}, minibatch_size: {minibatch_size}, clip: {clip}\n")
+        debug_log(lambda: f"discount: {discount}, gae: {gae}, actor_lr: {actor_lr}, critic_lr: {critic_lr}\n")
 
     def _wrap_env_base(self, env): #no video recording
 
@@ -133,9 +136,9 @@ class SimplePPO:
             for t in range(self.horizon):
                 with torch.no_grad():
                     actions_prob = self.actor(obs) 
-                    #debug_log(f"actions before sampling {actions_prob}")
+                    #debug_log(lambda: f"actions before sampling {actions_prob}")
                     a = distributions.Categorical(actions_prob).sample().item() 
-                    #debug_log(f"actions after sampling {a}, prob {actions_prob[a]}")
+                    #debug_log(lambda: f"actions after sampling {a}, prob {actions_prob[a]}")
                     self.global_step +=1
                     obs_n, r, done, trunc, info = env.step(a)
                     terminal = done or trunc
@@ -157,8 +160,8 @@ class SimplePPO:
                         cum_r = 0
                         self.global_episode += 1
 
-            debug_log(f"global iteration: {self.global_iterations}, global episode {self.global_episode}\n")
-
+            debug_log(lambda: f"global iteration: {self.global_iterations}, global episode {self.global_episode}\n")
+           
             #prepare tensors
             with torch.no_grad():
                 old_prob = torch.stack(actions_probs)
@@ -168,8 +171,22 @@ class SimplePPO:
                 terminals = torch.tensor(terminals, device=device)
                 acts = torch.tensor(actions, device=device)
             
-                target_v = self.critic.target_v(rs, obs_n, terminals)
-                advantages  = target_v - self.critic(obs).squeeze()
+            #calculate advantages
+            
+                vs = self.critic(obs).squeeze()
+                vs_n = self.critic(obs_n).squeeze() #squeeze :|
+                vs_n = torch.where(terminals, 0, vs_n)
+                dts = rs + self.critic.discount * vs_n - vs
+                advantages = torch.zeros_like(dts, device=device)
+                advantages[-1] = dts[-1]
+                for t in reversed(range(len(dts)-1)):
+                    if terminals[t+1]:
+                        advantages[t] = dts[t]  # Reset advantage at the end of the episode
+                    else:
+                        advantages[t] = dts[t] + self.critic.discount * self.critic.gae * advantages[t+1]
+
+                debug_log(lambda: f"calculate advantages:\nterminals: {terminals[:8]}, \nrewards{rs[:8]}, \nvs: {vs[:8]}, \nvs_n: {vs_n[:8]}, \ndts{dts[:8]}, \nadvantages {advantages[:8]}")
+                target_v = rs + self.critic.discount * torch.where(terminals, torch.zeros_like(vs_n), vs_n)
 
             for k in range(self.epochs):
                 self.actor_optimizer.zero_grad()
@@ -177,17 +194,14 @@ class SimplePPO:
                 
                 indices = torch.randint(0, self.horizon, (self.minibatch_size,), device=device)  # Efficient random sampling
                  
-                #debug_log(f"advantages: {sample_adv}, target_v {sample_target_v}, v_s{critic(sample_obs)}")
                 new_probs = self.actor(obs)
                 new_probs_actions = new_probs.gather(1, acts.unsqueeze(1)).squeeze(1)
                 
-                debug_log(f"probs: {new_probs[:8]}, actions {actions[:8]}, probs_actions{new_probs_actions[:8]}")
-
-                #debug_log(f"minibatch: {k} \n indices {indices}\n actions {sample_actions} \n old probs {sample_old_prob}\n new probs {new_probs}")
+                debug_log(lambda: f"probs: {new_probs[:8]}, actions {actions[:8]}, probs_actions{new_probs_actions[:8]}")
 
                 ratio = new_probs_actions[indices]/old_prob[indices]
-                debug_log(f"\nsampling base tensors: indices: {indices}, new_probs: {new_probs_actions}, old_prob: {old_prob}\n")
-                debug_log(f"sampled, new_probs: {new_probs_actions[indices]}, old_prob {old_prob[indices]}, ratio {ratio}")
+                debug_log(lambda: f"\nsampling base tensors: indices: {indices}, new_probs: {new_probs_actions}, old_prob: {old_prob}\n")
+                debug_log(lambda: f"sampled, new_probs: {new_probs_actions[indices]}, old_prob {old_prob[indices]}, ratio {ratio}")
 
                 sampled_adv = advantages[indices]
                 obj1 = ratio * sampled_adv
@@ -201,16 +215,16 @@ class SimplePPO:
                 c_loss.backward()
                 self.critic_optimizer.step()
                
-                if self.debug:
-                    with torch.no_grad():
-                        debug_log(f"epoch:{k}| actor_loss: {a_loss:.2f}, critic_loss {c_loss:.2f}\n")
-                        debug_log(f"epoch:{k}| mean prob ratio: {torch.mean(ratio).item()}, mean_adv: {torch.mean(advantages).item()}, mean_target_v: {torch.mean(target_v).item()}\n")
-                #debug_log(f"\nratio {ratio}\n obj1 {obj1}\n obj2 {obj2} \n a_loss {a_loss}\n c_loss {c_loss}\n")
+                with torch.no_grad():
+                    debug_log(lambda: f"epoch:{k}| actor_loss: {a_loss:.2f}, critic_loss {c_loss:.2f}\n")
+                    debug_log(lambda: f"epoch:{k}| mean prob ratio: {torch.mean(ratio).item()}, mean_adv: {torch.mean(advantages).item()}, mean_target_v: {torch.mean(target_v).item()}\n")
+                #debug_log(lambda: f"\nratio {ratio}\n obj1 {obj1}\n obj2 {obj2} \n a_loss {a_loss}\n c_loss {c_loss}\n")
 
 
-    def _debug_log(self, msg, filename):
+    def _debug_log(self, msg_lambda, filename):
         if not self.debug:
             return
+        msg = msg_lambda()
 
         with open(f'{self.log_path}/logs/{filename}.log', 'a') as f:
             f.write(f'{msg}\n')
