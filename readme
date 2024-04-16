@@ -1,0 +1,8 @@
+Reinforcement learning repository
+
+
+Init env:
+conda env create -f environment.yml
+
+Run an example module:
+python -m PPO.PpoLunar

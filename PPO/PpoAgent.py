@@ -2,6 +2,7 @@
 #https://arxiv.org/pdf/1707.06347.pdf
 
 #todo add entropy bonus
+#todo move from discrete actions to continous action space
 
 from collections import deque
 import os
@@ -58,7 +59,7 @@ class Actor(nn.Module):
     
 class SimplePPO:
 
-    def __init__(self, actor_network, critic_network, log_path, debug = False, target_device = 'cpu', video_interval = 1000, clip = 0.2, horizon = 2048, actor_lr = 0.0001, critic_lr = 0.0003, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95):
+    def __init__(self, actor_network, critic_network, log_path, debug = False, target_device = 'cpu', video_interval = 1000, clip = 0.2, horizon = 2048, actor_lr = 0.0001, min_actor_lr =0.000005, critic_lr = 0.0003, min_critic_lr = 0.00001, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95):
         global device
         device = target_device
 
@@ -73,6 +74,10 @@ class SimplePPO:
         self.critic_optimizer = torch.optim.Adam(self.critic.network.parameters(), lr = critic_lr)
         self.actor_lr_scheduler = lr_scheduler.ExponentialLR(self.actor_optimizer, gamma=0.9995)
         self.critic_lr_scheduler  = lr_scheduler.ExponentialLR(self.critic_optimizer, gamma=0.9995)
+        
+        self.min_critic_lr = min_critic_lr
+        self.min_actor_lr = min_actor_lr
+
         #debugging below
         self.log_path = log_path
         self.global_step = 0
@@ -208,7 +213,6 @@ class SimplePPO:
                 sampled_adv = advantages[indices]
                 obj1 = ratio * sampled_adv
                 obj2 = torch.clamp(ratio, 1-self.clip, 1+ self.clip) * sampled_adv 
-
                 a_loss = torch.mean(torch.min(obj1, obj2))
                 a_loss.backward()                                                  #todo maybe add gradient clipping
                 self.actor_optimizer.step()
@@ -221,10 +225,10 @@ class SimplePPO:
                 self.critic_lr_scheduler.step()
                 actor_lr, critic_lr = 0,0
                 for param_group in self.actor_optimizer.param_groups:
-                    param_group['lr'] = max(param_group['lr'], 0.000005)
+                    param_group['lr'] = max(param_group['lr'], self.min_actor_lr)
                     actor_lr = param_group['lr']
                 for param_group in self.critic_optimizer.param_groups:
-                    param_group['lr'] = max(param_group['lr'], 0.00001)
+                    param_group['lr'] = max(param_group['lr'], self.min_critic_lr)
                     critic_lr = param_group['lr']
 
                 with torch.no_grad():
