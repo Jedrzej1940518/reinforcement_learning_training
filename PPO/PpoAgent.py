@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as distributions
+import torch.optim.lr_scheduler as lr_scheduler
 
 import gymnasium as gym
 
@@ -70,7 +71,8 @@ class SimplePPO:
         self.critic = Critic(critic_network, discount, gae)
         self.actor_optimizer = torch.optim.Adam(self.actor.network.parameters(), lr= actor_lr, maximize=True)
         self.critic_optimizer = torch.optim.Adam(self.critic.network.parameters(), lr = critic_lr)
-
+        self.actor_lr_scheduler = lr_scheduler.ExponentialLR(self.actor_optimizer, gamma=0.9995)
+        self.critic_lr_scheduler  = lr_scheduler.ExponentialLR(self.critic_optimizer, gamma=0.9995)
         #debugging below
         self.log_path = log_path
         self.global_step = 0
@@ -215,8 +217,18 @@ class SimplePPO:
                 c_loss.backward()
                 self.critic_optimizer.step()
                
+                self.actor_lr_scheduler.step()
+                self.critic_lr_scheduler.step()
+                actor_lr, critic_lr = 0,0
+                for param_group in self.actor_optimizer.param_groups:
+                    param_group['lr'] = max(param_group['lr'], 0.000005)
+                    actor_lr = param_group['lr']
+                for param_group in self.critic_optimizer.param_groups:
+                    param_group['lr'] = max(param_group['lr'], 0.00001)
+                    critic_lr = param_group['lr']
+
                 with torch.no_grad():
-                    debug_log(lambda: f"epoch:{k}| actor_loss: {a_loss:.2f}, critic_loss {c_loss:.2f}\n")
+                    debug_log(lambda: f"epoch:{k}| actor_loss: {a_loss:.2f}, critic_loss {c_loss:.2f}, actor_lr {actor_lr}, critic_lr {critic_lr}\n")
                     debug_log(lambda: f"epoch:{k}| mean prob ratio: {torch.mean(ratio).item()}, mean_adv: {torch.mean(advantages).item()}, mean_target_v: {torch.mean(target_v).item()}\n")
                 #debug_log(lambda: f"\nratio {ratio}\n obj1 {obj1}\n obj2 {obj2} \n a_loss {a_loss}\n c_loss {c_loss}\n")
 
