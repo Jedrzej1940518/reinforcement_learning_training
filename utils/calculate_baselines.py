@@ -1,3 +1,4 @@
+import os
 import random
 
 def _run_episodes(env, episodes, policy):
@@ -56,7 +57,7 @@ def calculate_baselines(env, log_path, episodes=50):
             max_a_e = a
     
     print("Max action epsilon baseline calculated")
-
+    os.makedirs(f'{log_path}/logs', exist_ok=True)
     with open(f'{log_path}/logs/baselines.log', 'w') as f:
         f.write(f"Random action mean r: {random_avg_r}\n")
         f.write(f"Max action {max_a} mean r: {max_a_avg_r} \n")
