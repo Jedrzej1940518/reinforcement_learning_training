@@ -8,23 +8,6 @@ import torch.nn.init as init
 obs_space_lunar = 8
 a_space_lunar = 4
 
-class SplitActivationLayer(nn.Module):
-    def __init__(self, input_features, output_features):
-        super(SplitActivationLayer, self).__init__()
-        # Define a linear transformation for the entire output
-        self.linear = nn.Linear(input_features, output_features)
-        
-    def forward(self, x):
-        # Apply the linear transformation
-        x = self.linear(x)
-        # Split the tensor along the last dimension into two halves
-        x1, x2 = x.chunk(2, dim=-1)
-        # Apply cosine to the first half and ReLU to the second half
-        x1 = torch.cos(x1)
-        x2 = F.relu(x2)
-        # Concatenate the two halves back together
-        return torch.cat((x1, x2), dim=-1)
-
 def init_weights(m):
     if isinstance(m, nn.Linear):
         init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -55,8 +38,8 @@ default_actor_lunar.apply(init_weights)
 
 def train():
     env = gym.make('LunarLander-v2', render_mode = "rgb_array")
-    ppo = SimplePPO(default_actor_lunar, default_critic_lunar, "PPO/LunarLander", debug=True, target_device='cpu')
-    ppo.train(env, 5000, export_model=True, resume=False)
+    ppo = SimplePPO(default_actor_lunar, default_critic_lunar, "PPO/LunarLander", debug=True, target_device='cpu', minibatch_size=64)
+    ppo.train(env, 5000, export_model=True, resume=True)
     
 def write_baselines():
     env = gym.make('LunarLander-v2', render_mode = "rgb_array")

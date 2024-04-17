@@ -59,7 +59,7 @@ class Actor(nn.Module):
     
 class SimplePPO:
 
-    def __init__(self, actor_network, critic_network, log_path, debug = False, target_device = 'cpu', video_interval = 1000, clip = 0.2, horizon = 2048, actor_lr = 0.0001, min_actor_lr =0.000005, critic_lr = 0.0003, min_critic_lr = 0.00001, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95):
+    def __init__(self, actor_network, critic_network, log_path, debug = False, target_device = 'cpu', video_interval = 1000, clip = 0.2, horizon = 2048, actor_lr = 0.0001, min_actor_lr =0.00001, critic_lr = 0.0003, min_critic_lr = 0.00003, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95, entropy_factor = 0.01):
         global device
         device = target_device
 
@@ -67,6 +67,7 @@ class SimplePPO:
         self.epochs = epochs
         self.minibatch_size = minibatch_size 
         self.clip = clip
+        self.entropy_factor = entropy_factor
 
         self.actor = Actor(actor_network) 
         self.critic = Critic(critic_network, discount, gae)
@@ -149,8 +150,8 @@ class SimplePPO:
                     self.global_step +=1
                     obs_n, r, done, trunc, info = env.step(a)
                     terminal = done or trunc
-                    
-                    observations.append(obs)
+                                        
+                    observations.append(obs) 
                     actions.append(a)
                     rewards.append(r)
                     observations_n.append(obs_n)
@@ -192,8 +193,21 @@ class SimplePPO:
                     else:
                         advantages[t] = dts[t] + self.critic.discount * self.critic.gae * advantages[t+1]
 
-                debug_log(lambda: f"calculate advantages:\nterminals: {terminals[:8]}, \nrewards{rs[:8]}, \nvs: {vs[:8]}, \nvs_n: {vs_n[:8]}, \ndts{dts[:8]}, \nadvantages {advantages[:8]}")
-                target_v = rs + self.critic.discount * torch.where(terminals, torch.zeros_like(vs_n), vs_n)
+                if self.debug:
+                    start_index = 0
+                    end_index = 60
+                    for i, elem in enumerate(terminals):
+                        if i > 30 and i < 1900 and elem:
+                            start_index = i-2
+                            end_index = i+2
+                            break
+                    si = start_index
+                    ei = end_index
+
+                    debug_log(lambda: f"calculate advantages:\nterminals: {terminals[si:ei]}, \nrewards{rs[si:ei]}, \nvs: {vs[si:ei]}, \nvs_n: {vs_n[si:ei]}, \ndts{dts[si:ei]}, \nadvantages {advantages[si:ei]}")
+                
+                target_v = rs + self.critic.discount * vs_n
+
 
             for k in range(self.epochs):
                 self.actor_optimizer.zero_grad()
@@ -206,18 +220,32 @@ class SimplePPO:
                 
                 debug_log(lambda: f"probs: {new_probs[:8]}, actions {actions[:8]}, probs_actions{new_probs_actions[:8]}")
 
-                ratio = new_probs_actions[indices]/old_prob[indices]
+                ratio = torch.exp(torch.log(new_probs_actions[indices]) - torch.log(old_prob[indices]))
+
                 debug_log(lambda: f"\nsampling base tensors: indices: {indices}, new_probs: {new_probs_actions}, old_prob: {old_prob}\n")
-                debug_log(lambda: f"sampled, new_probs: {new_probs_actions[indices]}, old_prob {old_prob[indices]}, ratio {ratio}")
+                debug_log(lambda: f"sampled, new_probs: {new_probs_actions[indices]}, old_prob {old_prob[indices]}, ratio {ratio}\n")
 
                 sampled_adv = advantages[indices]
                 obj1 = ratio * sampled_adv
                 obj2 = torch.clamp(ratio, 1-self.clip, 1+ self.clip) * sampled_adv 
-                a_loss = torch.mean(torch.min(obj1, obj2))
-                a_loss.backward()                                                  #todo maybe add gradient clipping
-                self.actor_optimizer.step()
                 
-                c_loss = torch.mean(torch.pow(self.critic(obs[indices]) - target_v[indices], 2)) 
+                new_probs = new_probs[indices]
+                new_probs = torch.clamp(new_probs, min=1e-8)
+                entropy = -new_probs * torch.log(new_probs)
+                entropy_scalar = torch.mean(entropy)
+
+                debug_log(lambda: f"entropy calc | \nnew_probs {new_probs[:8]}, \nentropy {entropy[:8]}\nentropy scalar {entropy_scalar}\n")
+
+                a_loss = torch.mean(torch.min(obj1, obj2)) + self.entropy_factor * entropy_scalar
+                #verbose
+                debug_log(lambda: f"loss components | obj1 (policy gradient): {torch.mean(obj1).item():.5f}, obj2 (clip): {torch.mean(obj2).item():.5f}, entropy scalar :{(self.entropy_factor * entropy_scalar).item():.5f}\n")
+                a_loss.backward()                                                 
+                self.actor_optimizer.step()
+                with torch.no_grad():
+                    debug_log(lambda: f"critic loss calculation| critic obs\n{self.critic(obs[indices])}\ntarget_vs\n{target_v[indices]}\n")      
+
+                #c_loss = torch.mean(torch.pow(self.critic(obs[indices]) - target_v[indices], 2)) 
+                c_loss = torch.nn.functional.smooth_l1_loss(self.critic(obs[indices]).squeeze(), target_v[indices])
                 c_loss.backward()
                 self.critic_optimizer.step()
                
