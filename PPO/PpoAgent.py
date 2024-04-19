@@ -231,20 +231,16 @@ class SimplePPO:
                 ratio = torch.exp(new_log_probs[indices] - old_log_prob[indices])
 
                 obj1 = ratio * advantages[indices]
-                #negative_advantages = advantages[indices] < 0
-                #obj2 = torch.where(negative_advantages, 1 - self.clip * advantages[indices], 1 + self.clip * advantages[indices])
                 obj2 = torch.clamp(ratio, 1-self.clip, 1+ self.clip) * advantages[indices] 
 
                 debug_log(lambda: f"NEWLOG| ratio{ratio}, obj1 {obj1}, obj2 {obj2}, advantages {advantages[indices]}")
                 #todo add entorpy bonus
-                #new_probs = new_probs[indices]
-                #new_probs = torch.clamp(new_probs, min=1e-8)
-                #entropy = -new_probs * torch.log(new_probs)
-                #entropy_scalar = torch.mean(entropy)
+                new_probs = torch.exp(new_log_probs[indices])
+                entropy_scalar = distributions.Categorical(probs = new_probs).entropy()
 
-                #debug_log(lambda: f"entropy calc | \nnew_probs {new_probs}, \nentropy {entropy}\nentropy scalar {entropy_scalar}\n")
+                debug_log(lambda: f"entropy calc | \nnew_probs {new_probs}, \nentropy scalar: {entropy_scalar}, times factor: {self.entropy_factor *entropy_scalar}\n")
 
-                a_loss = torch.mean(torch.min(obj1, obj2)) # + self.entropy_factor * entropy_scalar
+                a_loss = torch.mean(torch.min(obj1, obj2)) + self.entropy_factor * entropy_scalar
                 #verbose
                 debug_log(lambda: f"loss components | obj1 (policy gradient): {torch.mean(obj1).item():.5f}, obj2 (clip): {torch.mean(obj2).item():.5f}\n")
                 a_loss.backward()                                                 

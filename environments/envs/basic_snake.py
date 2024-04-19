@@ -7,7 +7,7 @@ from gymnasium import spaces
 
 
 # Set up display
-WIDTH, HEIGHT = 600, 400
+WIDTH, HEIGHT = 600, 600
 GRID_SIZE = 20
 GRID_WIDTH, GRID_HEIGHT = WIDTH // GRID_SIZE, HEIGHT // GRID_SIZE
 
@@ -73,6 +73,12 @@ class Snake:
             pygame.draw.rect(surface, self.color, r)
             pygame.draw.rect(surface, WHITE, r, 1)
 
+    def dir_as_int(self):
+        for indx, dir in enumerate(DIRECTIONS):
+            if self.direction == dir:
+                return indx
+        return 0
+
 # Food class
 class Food:
     def __init__(self):
@@ -92,8 +98,9 @@ class SnakeEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4} #todo check higher fps
 
     def __init__(self, render_mode = None):
-        
-        self.observation_space = spaces.Box(0, GRID_SIZE - 1, shape=(4,), dtype=int) #snake position x,y, then food position x,y 
+        low = np.array([0, 0, 0, 0, 0]).astype(np.int32)
+        high = np.array([len(DIRECTIONS)-1,  WIDTH,  HEIGHT,  WIDTH,  HEIGHT]).astype(np.int32)
+        self.observation_space = spaces.Box(low, high, shape=(5,), dtype=int) #snake direction, snake position x,y, then food position x,y 
         self.action_space = spaces.Discrete(4) #up, down, left, right 
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -105,7 +112,7 @@ class SnakeEnv(gym.Env):
     def _get_obs(self):
         s_pos = self.snake.get_head_position()
         f_pos = self.food.position
-        return np.array([s_pos[0], s_pos[1], f_pos[0], f_pos[1]]) // GRID_SIZE
+        return np.array([self.snake.dir_as_int(), s_pos[0], s_pos[1], f_pos[0], f_pos[1]])
 
     def _get_info(self):
         return {"Info" : 0}
@@ -135,7 +142,7 @@ class SnakeEnv(gym.Env):
         self.snake.turn(dir)
 
         terminated = self.snake.move()
-        reward = 1 if self._food_eaten() else 0  
+        reward = 1 if self._food_eaten() else -0.001  
         
         while self._food_eaten(): #randomize untill food is not on snake, fix later
             self.food.randomize_position()

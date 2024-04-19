@@ -7,7 +7,10 @@ from PPO.PpoAgent import *
 import torch.nn.init as init
 from utils.calculate_baselines import calculate_baselines
 
-obs_space = 4
+#this is performing pretty bad, probably because snake requires a lot of precision (exact move to hit food and not hit a wall)
+#and this is a very probabilisitc machine
+
+obs_space = 5 #dir, x,y, x,y
 a_space = 1 # we're outputing one continous action
 env_name = 'environments:environments/SnakeEnv-v0'
 log_path = "PPO/Trainings/Snake"
@@ -20,18 +23,18 @@ def init_weights(m):
             init.constant_(m.bias, 0)
 
 #critic
-critic_net =  nn.Sequential(  nn.Linear(obs_space, 512),
+critic_net =  nn.Sequential(  nn.Linear(obs_space, 256),
                                         nn.ReLU(),
-                                        nn.Linear(512, 256),
+                                        nn.Linear(256, 256),
                                         nn.ReLU(),
                                         nn.Linear(256, 64),
                                         nn.ReLU(),
                                         nn.Linear(64, 1))
 
 #actor 
-actor_net = nn.Sequential(    nn.Linear(obs_space, 512),
+actor_net = nn.Sequential(    nn.Linear(obs_space, 256),
                                         nn.ReLU(),
-                                        nn.Linear(512, 256),
+                                        nn.Linear(256, 256),
                                         nn.ReLU(),
                                         nn.Linear(256, 64),
                                         nn.ReLU(),
@@ -41,8 +44,7 @@ critic_net.apply(init_weights)
 actor_net.apply(init_weights)
 
 def translate_input(net_input):
-    input = net_input / 20
-    return input
+    return net_input / 600 #normalizing but probably should not divide direction by 600 :)
 
 def translate_output(net_output):
     action = net_output.clamp(-1, 1)
@@ -53,7 +55,7 @@ def translate_output(net_output):
 
 def train():
     env = gym.make(env_name, render_mode = "rgb_array" )
-    ppo = SimplePPO(actor_net, a_space, critic_net, log_path, translate_input, translate_output, debug=True, debug_period = 30, target_device='cpu', minibatch_size=64)
+    ppo = SimplePPO(actor_net, a_space, critic_net, log_path, translate_input, translate_output, debug=True, debug_period = 30, target_device='cpu', minibatch_size=64, entropy_factor=0.00001)
     ppo.train(env, 5000, export_model=True, resume=False)
     
 def write_baselines():
@@ -61,7 +63,7 @@ def write_baselines():
     calculate_baselines(env, log_path, 30)
 
 def main(): 
-    #write_baselines()
+    write_baselines()
     train()
 
 if __name__ == "__main__":
