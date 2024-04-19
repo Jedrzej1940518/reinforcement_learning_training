@@ -47,12 +47,14 @@ class Actor(nn.Module):
             x = x.unsqueeze(0)  # Unsqueeze it so we can properly select its halfs
 
         mean = x[:, :self.action_space]         # First half for means
-        mean = F.tanh(mean)                     #normalize it
+        mean = mean.squeeze()
+        mean_tan = F.tanh(mean)                     #normalize it
         log_std = x[:, self.action_space:]      # Second half for log standard deviations
+        log_std = log_std.squeeze()
         std = F.softplus(log_std)               # Standard deviation must be positive; use exp to enforce this, maybe SOFTPLUS instead
                                                 
-        debug_log(lambda :f"NEWLOG| mean {mean[:8]}\n std {std[:8]} \n log_std {log_std[:8]}\n")
-        return mean, std
+        debug_log(lambda :f"NEWLOG| mean_tan{mean_tan}, mean {mean}\n std {std} \n log_std {log_std}\n")
+        return mean_tan, std
     
     def sample_continous_action(self, x: torch.Tensor):
         mean, std = self.forward(x)
@@ -60,13 +62,13 @@ class Actor(nn.Module):
         actions = normal_dist.sample()                          # Sample from the normal distribution
         actions = actions.squeeze()
         log_probs = normal_dist.log_prob(actions).sum(axis=-1)  # Sum log probabilities for multi-dimensional actions
-        debug_log(lambda :f"NEWLOG| actions {actions[:8]}\n log_probs {log_probs[:8]} \n exp(log_probs){torch.exp(log_probs[:8])}\n")
+        debug_log(lambda :f"NEWLOG| actions {actions}\n log_probs {log_probs} \n exp(log_probs){torch.exp(log_probs)}\n")
         return actions, log_probs
 
 
 class SimplePPO:
 
-    def __init__(self, actor_network, action_space, critic_network, log_path, debug = False, debug_period = 10, target_device = 'cpu', video_interval = 1000, clip = 0.2, horizon = 2048, actor_lr = 0.0001, min_actor_lr =0.00001, critic_lr = 0.0003, min_critic_lr = 0.00003, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95, entropy_factor = 0.01):
+    def __init__(self, actor_network, action_space, critic_network, log_path, translate_input = lambda i: i, translate_ouput = lambda o: o, debug = False, debug_period = 10, target_device = 'cpu', video_interval = 1000, clip = 0.2, horizon = 2048, actor_lr = 0.0001, min_actor_lr =0.00001, critic_lr = 0.0003, min_critic_lr = 0.00003, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95, entropy_factor = 0.01):
         global device
         device = target_device
 
@@ -75,9 +77,12 @@ class SimplePPO:
         self.minibatch_size = minibatch_size 
         self.clip = clip
         self.entropy_factor = entropy_factor
+        self.translate_ouput = translate_ouput
+        self.translate_input = translate_input
 
         self.actor = Actor(action_space, actor_network) 
         self.critic = Critic(critic_network, discount, gae)
+
         self.actor_optimizer = torch.optim.Adam(self.actor.network.parameters(), lr= actor_lr, maximize=True)
         self.critic_optimizer = torch.optim.Adam(self.critic.network.parameters(), lr = critic_lr)
         self.actor_lr_scheduler = lr_scheduler.ExponentialLR(self.actor_optimizer, gamma=0.9995)
@@ -109,8 +114,8 @@ class SimplePPO:
         debug_log(lambda: f"discount: {discount}, gae: {gae}, actor_lr: {actor_lr}, critic_lr: {critic_lr}\n")
 
     def _wrap_env_base(self, env): #no video recording
-
-        env = gym.wrappers.TransformObservation(env, lambda obs: torch.tensor(obs, dtype=torch.float, device=device, requires_grad=False))
+        transform_obs = lambda obs: self.translate_input(torch.tensor(obs, dtype=torch.float, device=device, requires_grad=False)) #turn to tensor and then apply translation
+        env = gym.wrappers.TransformObservation(env, transform_obs)
         #env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.RecordVideo(env, f'{self.log_path}/videos', episode_trigger=lambda x : x % self.video_interval == 0, disable_logger=False)
         env.metadata['render_fps'] = 60
@@ -152,11 +157,11 @@ class SimplePPO:
             for t in range(self.horizon):
                 with torch.no_grad():
                     acts, log_probs = self.actor.sample_continous_action(obs)
-                    env_actions = acts.clamp(-1,1)
+                    env_actions = self.translate_ouput(acts)
                     debug_log(lambda: f"NEWLOG| actions after sampling {acts}, probs {log_probs}\n env_actions {env_actions}\n")
     
                     self.global_step +=1
-                    obs_n, r, done, trunc, info = env.step(list(env_actions))
+                    obs_n, r, done, trunc, info = env.step(env_actions)
                     terminal = done or trunc
                                         
                     observations.append(obs) 
@@ -187,7 +192,7 @@ class SimplePPO:
                 rs = torch.tensor(rewards, device=device)
                 terminals = torch.tensor(terminals, device=device)
                 
-                debug_log(lambda: f"NEWLOG| acts: {acts[:8]}\nold_prob {old_log_prob[:8]}\n")
+                debug_log(lambda: f"NEWLOG| acts: {acts}\nold_prob {old_log_prob}\n")
             #calculate advantages
             
                 vs = self.critic(obs).squeeze()
@@ -203,7 +208,7 @@ class SimplePPO:
                         advantages[t] = dts[t] + self.critic.discount * self.critic.gae * advantages[t+1]
 
 
-                debug_log(lambda: f"calculate advantages:\nterminals: {terminals[:8]}, \nrewards{rs[:8]}, \nvs: {vs[:8]}, \nvs_n: {vs_n[:8]}, \ndts{dts[:8]}, \nadvantages {advantages[:8]}")
+                debug_log(lambda: f"calculate advantages:\nterminals: {terminals}, \nrewards{rs}, \nvs: {vs}, \nvs_n: {vs_n}, \ndts{dts}, \nadvantages {advantages}")
                 
                 target_v = rs + self.critic.discount * vs_n
 
@@ -217,9 +222,11 @@ class SimplePPO:
                 #new_probs = self.actor(obs)
                 mean, std =  self.actor(obs)                                #todo probaby should use only indexes
                 normal_dist = torch.distributions.Normal(mean, std)
-                new_log_probs = normal_dist.log_prob(acts).sum(axis=-1)  # Sum log probabilities for multi-dimensional actions
+                new_log_probs = normal_dist.log_prob(acts)
+                if self.actor.action_space > 1: # Sum log probabilities for multi-dimensional actions
+                    new_log_probs.sum(axis=-1)  
 
-                debug_log(lambda: f"NEWLOG|epoch{k}:\n actions {acts[:8]}, old_log_probs {old_log_prob[:8]}, new_log_probs{new_log_probs[:8]}")
+                debug_log(lambda: f"NEWLOG|epoch{k}:\n actions {acts}, old_log_probs {old_log_prob}, new_log_probs{new_log_probs}")
 
                 ratio = torch.exp(new_log_probs[indices] - old_log_prob[indices])
 
@@ -228,14 +235,14 @@ class SimplePPO:
                 #obj2 = torch.where(negative_advantages, 1 - self.clip * advantages[indices], 1 + self.clip * advantages[indices])
                 obj2 = torch.clamp(ratio, 1-self.clip, 1+ self.clip) * advantages[indices] 
 
-                debug_log(lambda: f"NEWLOG| ratio{ratio[:8]}, obj1 {obj1[:8]}, obj2 {obj2[:8]}, advantages {advantages[indices][:8]}")
+                debug_log(lambda: f"NEWLOG| ratio{ratio}, obj1 {obj1}, obj2 {obj2}, advantages {advantages[indices]}")
                 #todo add entorpy bonus
                 #new_probs = new_probs[indices]
                 #new_probs = torch.clamp(new_probs, min=1e-8)
                 #entropy = -new_probs * torch.log(new_probs)
                 #entropy_scalar = torch.mean(entropy)
 
-                #debug_log(lambda: f"entropy calc | \nnew_probs {new_probs[:8]}, \nentropy {entropy[:8]}\nentropy scalar {entropy_scalar}\n")
+                #debug_log(lambda: f"entropy calc | \nnew_probs {new_probs}, \nentropy {entropy}\nentropy scalar {entropy_scalar}\n")
 
                 a_loss = torch.mean(torch.min(obj1, obj2)) # + self.entropy_factor * entropy_scalar
                 #verbose
@@ -243,7 +250,7 @@ class SimplePPO:
                 a_loss.backward()                                                 
                 self.actor_optimizer.step()
                 with torch.no_grad():
-                    debug_log(lambda: f"critic loss calculation| critic obs\n{self.critic(obs[indices])[:8]}\ntarget_vs\n{target_v[indices][:8]}\n")      
+                    debug_log(lambda: f"critic loss calculation| critic obs\n{self.critic(obs[indices])}\ntarget_vs\n{target_v[indices]}\n")      
 
                 #c_loss = torch.mean(torch.pow(self.critic(obs[indices]) - target_v[indices], 2)) 
                 c_loss = torch.nn.functional.smooth_l1_loss(self.critic(obs[indices]).squeeze(), target_v[indices])
