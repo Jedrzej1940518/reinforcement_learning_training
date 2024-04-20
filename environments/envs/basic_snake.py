@@ -142,7 +142,7 @@ class SnakeEnv(gym.Env):
         self.snake.turn(dir)
 
         terminated = self.snake.move()
-        reward = 1 if self._food_eaten() else 0
+        reward = 1 if self._food_eaten() else 0 
         
         while self._food_eaten(): #randomize untill food is not on snake, fix later
             self.food.randomize_position()
