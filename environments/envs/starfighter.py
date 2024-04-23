@@ -1,4 +1,5 @@
 
+from dataclasses import dataclass
 import math
 import random
 import numpy as np
@@ -33,47 +34,130 @@ Starfighter env - we're a space fighter trying to survive as long as possible an
 """
 
 FIGHTER_MAX_VELOCITY = 10
+FIGHTER_MAX_ACCELERATION = 1
 FIGHTER_COOLDOWN  = 10
 FIGHTER_MAX_HP = 10
+FIGHTER_MAX_ROTATION_SPEED = 0.1 #radians
 
 ASTEROID_MAX_SIZE = 20
 ASTEROID_MAX_VELOCITY = 8
 ASTEROID_MAX_HP = 3
 MAX_ASTEROIDS = 4
 
-class Asteroid:
-    def __init__(self, x, y, size, velocity, velocity_angle, hp):
-        self.x = x
-        self.y = y
-        self.size = size
+class Vector:
+    
+    def __init__(self, magnitude=0, direction=0):
+        self.magnitude = magnitude
+        self.direction = direction
+
+    def cartesian(self):
+        r = self.magnitude
+        return r* math.cos(self.direction), r*math.sin(self.direction)
+
+    def from_cartesian(self, x, y):
+        self.magnitude = math.sqrt(x**2 + y**2)
+        self.direction = math.atan2(y, x)
+        return self
+
+    def __iter__(self):
+        return iter((self.magnitude, self.direction))
+
+@dataclass
+class Point:
+    x: float
+    y: float      #angle in radians
+
+class RotationComponent:
+    def __init__(self, max_rotation_speed, rotation):
+        self.max_rotation_speed = max_rotation_speed
+        self.rotation = rotation
+        self.rotation_speed = 0
+
+    def rotate(self, rotation_speed):    
+        self.rotation_speed = min(rotation_speed, self.max_rotation_speed) if rotation_speed > 0 else max(rotation_speed, -self.max_rotation_speed)
+
+    def update(self):
+        self.rotation += self.rotation_speed
+        
+        if self.rotation < 0:
+            self.rotation += 2* math.pi
+        else:
+            self.rotation -= 2* math.pi
+
+class MovementComponent:
+    
+    def __init__(self, position:Point, velocity: Vector, max_speed, max_acceleration = 0):
+        
+        self.position = position
         self.velocity = velocity
-        self.velocity_angle = velocity_angle
+        self.acceleration = Vector()
+
+        self.max_speed = max_speed
+        self.max_acceleration = max_acceleration
+
+    def accelerate(self, acceleration:Vector):
+        self.acceleration = acceleration
+        self.acceleration.magnitude = min(self.acceleration.magnitude, self.max_acceleration)
+
+    def _update_velocity(self):
+        if self.max_acceleration == 0:
+            return 
+
+        x, y = self.velocity.cartesian()
+        xa, ya = self.acceleration.cartesian()
+        
+        self.velocity = Vector().from_cartesian(x+xa, y+ya)
+        self.velocity.magnitude = min(self.velocity.magnitude, self.max_speed)
+        print(f"debug x,y: {x,y}, xa, ya{xa, ya}, new velocity {self.velocity.cartesian()}")
+
+    def update(self):
+        x,y = self.velocity.cartesian()
+        self.position.x += x
+        self.position.y += y
+        self._update_velocity()
+
+    def get_normalized_obs(self):
+        return [self.position.x / WIDTH, self.position.y / HEIGHT, self.velocity.magnitude / self.max_speed, self.velocity.direction / math.pi]
+
+
+class Asteroid:
+    def __init__(self, movement_component : MovementComponent, size: int, hp: int):
+        self.movement_component = movement_component
+        self.size = size
         self.max_hp = hp
         self.hp_left = hp
 
-    def get_normalized_obs(self):
-        return [self.x / WIDTH, self.y / HEIGHT, self.size / ASTEROID_MAX_SIZE, self.velocity / ASTEROID_MAX_VELOCITY, self.velocity_angle / math.pi, self.hp_left / ASTEROID_MAX_HP]
+    def update(self):
+        self.movement_component.update()
 
-    def get_obs(self):
-        """
-        asteroid_num* [asteroid x, asteroid y, asteroid size, asteroid speed, asteroid speed dir, asteroid hp left]
-        """
-        return [self.x, self.y, self.size, self.velocity, self.velocity_angle, self.hp_left]
+    def get_normalized_obs(self):
+        return self.movement_component.get_normalized_obs() + [self.size / ASTEROID_MAX_SIZE, self.hp_left / ASTEROID_MAX_HP]
 
 class Starfighter:
-    def __init__(self):
-        self.x = 1
-        self.y = 1
+    def __init__(self, movement_component: MovementComponent, rotation_component: RotationComponent):
+        self.movement_component = movement_component
+        self.rotation_component = rotation_component
+        self.hp = FIGHTER_MAX_HP
+        self.cooldown = 0
+        self.shooting = False
+
+    def instruct(self, acceleration, rotation_speed, shooting):
+        self.movement_component.accelerate(acceleration)
+        self.rotation_component.rotate(rotation_speed)
+        self.shooting = shooting
+
+    def update(self):
+        self.movement_component.update()
+        self.rotation_component.update()
+        
         pass
 
     def get_normalized_obs(self):
-        pass
-    
-    def get_obs(self):
         """
         fighter x, fighter y, fighter speed, fighter speed direction, fighter rotation, fighter cooldown, fighter hp left
         """
-        pass
+        return self.movement_component.get_normalized_obs() + [self.rotation_component.rotation / math.pi, self.cooldown / FIGHTER_COOLDOWN, self.hp / FIGHTER_MAX_HP]
+
 
 class StarfighterEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4} #todo check higher fps
@@ -95,14 +179,14 @@ class StarfighterEnv(gym.Env):
         """
         asteroid:
         -x,y positions -> 0....WIDTH, 0....HEIGHT
-        -size -> 1....ASTEROID_MAX_SIZE
-        -velocity magnitude -> 1.....ASTEROID_MAX_VELOCITY
+        -size -> 0....ASTEROID_MAX_SIZE
+        -velocity magnitude -> 0.....ASTEROID_MAX_VELOCITY
         -velocity direction -> -3.14....3.14
         -hp left (numbers of shots to kill) -> 0.....ASTEROID_MAX_HP
         """
 
-        asteroid_low = [0,0,1, 1, -3.14, 0]
-        asteroid_high = [WIDTH, HEIGHT, ASTEROID_MAX_SIZE, ASTEROID_MAX_VELOCITY, math.pi, ASTEROID_MAX_HP]
+        asteroid_low = [0,0, 0, -3.14, 0, 0]
+        asteroid_high = [WIDTH, HEIGHT, ASTEROID_MAX_VELOCITY, math.pi, ASTEROID_MAX_SIZE, ASTEROID_MAX_HP]
 
         high = fighter_high + asteroid_high * MAX_ASTEROIDS 
         high = np.array(high).astype(np.float32)
@@ -110,19 +194,19 @@ class StarfighterEnv(gym.Env):
         low = np.array(low).astype(np.float32)
         """
         obs space:
-        fighter x, fighter y, fighter speed, fighter speed direction, fighter rotation, fighter cooldown, fighter hp left, + asteroid_num* [asteroid x, asteroid y, asteroid size, asteroid speed, asteroid speed dir, asteroid hp left]
+        fighter x, fighter y, fighter speed, fighter speed direction, fighter rotation, fighter cooldown, fighter hp left, + asteroid_num* [asteroid x, asteroid y, asteroid speed, asteroid speed dir, asteroid size, asteroid hp left]
         """
         self.observation_space = spaces.Box(low, high, shape=(len(high),), dtype=float) 
         
         """
         action space:
-        rotate -> -1.....1 -> left, right (percentages)
-        shoot -> 0...1 -> no shoot <0.5, >0.5 shoot
         accelerate -> 0...1 -> acceleration force (percentage)
         acceleration dir -> -3.14...3.14 -> direction of acceleration (radians)
+        rotate -> -1.....1 -> left, right (percentages)
+        shoot -> -1...1 -> <0 no shoot, >0 shoot
         """
-        action_space_low = np.array([-1,0,0,-math.pi]).astype(np.float32)
-        action_space_high = np.array([1, 1, 1, math.pi]).astype(np.float32)
+        action_space_low = np.array([0,-math.pi, -1, -1]).astype(np.float32)
+        action_space_high = np.array([1,math.pi, 1, 1]).astype(np.float32)
         self.action_space = spaces.Box(action_space_low, action_space_high, shape=(len(action_space_high),), dtype=float) 
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -132,54 +216,66 @@ class StarfighterEnv(gym.Env):
         self.clock = None
 
     
-    def _random_point_on_square(self):
+    def _random_point_on_square(self) -> Point:
         edge = random.randint(1, 4)
         t = random.uniform(0, EDGE_L)
         
         if edge == 1:   #top
-            return t, 0
+            return Point(t, 0)
         elif edge == 2: #right
-            return EDGE_L, t 
+            return Point(EDGE_L, t) 
         elif edge == 3: #bottom
-            return t, EDGE_L
+            return Point(t, EDGE_L)
         elif edge == 4: #left
-            return 0, t
+            return Point(0, t)
         
-        return 0,0
+        return Point(0,0)
     
-    def _angle_between_points(self, ax, ay, bx, by):
+    def _angle_between_points(self, a: Point, b: Point):
         # Direction vector
-        dx = bx - ax
-        dy = by - ay
+        dx = b.x - a.x
+        dy = b.y - a.y
         return math.atan2(dy, dx) 
 
 
     def _make_asteroid(self) -> Asteroid:
-        x, y = self._random_point_on_square()
+        
+        pos = self._random_point_on_square()
+        angle_to_starship = self._angle_between_points(pos, self.starfighter.movement_component.position)
+        velocity = Vector(random.uniform(0.1, ASTEROID_MAX_VELOCITY), random.uniform(-math.pi/6, math.pi/6) + angle_to_starship) #velocity in general direction of starship +- 30 degrees
+        asteroid_movement_component = MovementComponent(pos, velocity, ASTEROID_MAX_VELOCITY)
+        
         size = random.randint(1, ASTEROID_MAX_SIZE)
-        velocity = random.uniform(0.1, ASTEROID_MAX_VELOCITY) #magnitude
-        angle_to_starship = self._angle_between_points(x,y, self.starfighter.x, self.starfighter.y)
-        velocity_dir = random.uniform(-math.pi/6, math.pi/6) + angle_to_starship #velocity in general direction of starship +- 30 degrees
         hp = random.randint(1, ASTEROID_MAX_HP)             #todo probably scale with size
-        return Asteroid(x,y,size,velocity, velocity_dir, hp)
+        return Asteroid(asteroid_movement_component, size, hp)
 
     def _get_obs(self):
 
-        obs = self.starfighter.get_obs()
+        obs = self.starfighter.get_normalized_obs()
         for asteroid in self.asteroids:
-            obs += asteroid.get_obs() 
-        print("obs: ", obs)
+            obs += asteroid.get_normalized_obs() 
+
+        print("normalized_obs: ", obs)
 
         return np.array(obs)
 
     def _get_info(self):
         return {"Info" : 0}
     
-    def _action_into_direction(self, action):
-        return DIRECTIONS[action]
-    
-    def _food_eaten(self):
-        return self.snake.get_head_position() == self.food.position
+    def _instruct_starfighter(self, action):
+        """
+        action space:
+        accelerate -> 0...1 -> acceleration force (percentage)
+        acceleration dir -> -3.14...3.14 -> direction of acceleration (radians)
+        rotate -> -1.....1 -> left, right (percentages)
+        shoot -> -1...1 -> <0 no shoot, >0 shoot
+        """
+
+        acceleration = Vector(action[0] * FIGHTER_MAX_ACCELERATION, action[1])
+        rotation_speed = action[2] * FIGHTER_MAX_ROTATION_SPEED
+        shooting = action[3] > 0
+        self.starfighter.instruct(acceleration, rotation_speed, shooting)
+
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -196,15 +292,15 @@ class StarfighterEnv(gym.Env):
     
     def step(self, action):
        
-        dir = self._action_into_direction(action)
-        self.snake.turn(dir)
+        self._instruct_starfighter(action)
+        self.starfighter.update()
+        for a in self.asteroids:
+            a.update()
 
-        terminated = self.snake.move()
-        reward = 1 if self._food_eaten() else 0  
-        
-        while self._food_eaten(): #randomize untill food is not on snake, fix later
-            self.food.randomize_position()
 
+        terminated = self.starfighter.hp <= 0
+        reward = 1
+     
         observation = self._get_obs()
         info = self._get_info()
 
