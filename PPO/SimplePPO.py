@@ -66,7 +66,7 @@ class Actor(nn.Module):
 #Discount (γ) 0.99
 #GAE parameter (λ) 0.95
     
-class SimplePPO:
+class SimplePPO_old:
 
     def __init__(self, log_path, debug_fun = lambda t : False, clip = 0.2, horizon = 2048, lr = 0.0001, epochs = 10, minibatch_size = 64, discount = 0.99, gae = 0.95):
         self.horizon = horizon

@@ -7,9 +7,10 @@
 *models
 *videos
 *test
-
+build
 ###########################
 #         debug           #
 ###########################
 *.mp4
 test.py
+*.so
