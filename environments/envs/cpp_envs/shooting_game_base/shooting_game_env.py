@@ -1,5 +1,5 @@
 
-import shooting_game
+from environments.envs.cpp_envs.shooting_game_base.shooting_game_module import ShootingGame
 
 import numpy as np
 
@@ -22,14 +22,15 @@ target speed (0...20)
 target radius (20...100)
 
 """
-#cd build && cmake .. && make && mv shooting_game.cpython-310-x86_64-linux-gnu.so .. && cd ..
+#sudo rm -rf build && mkdir build && cd build && cmake .. && make && mv shooting_game_module.cpython-310-x86_64-linux-gnu.so .. && cd ..
 class ShootingGameEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4} #todo check higher fps
 
     def __init__(self, render_mode = None):
 
-        self.game = shooting_game.ShootingGame()
+        self.game = ShootingGame()
+        self.global_step = 0
 
         low = np.array([0, 0, 0, 20]).astype(np.float32)
         high = np.array([SCREEN_WIDTH,  SCREEN_HEIGHT,  20,  100]).astype(np.float32)
@@ -40,9 +41,20 @@ class ShootingGameEnv(gym.Env):
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
+        self._init_render()
+        #self.clock = None
 
-        self.render_init = False
-        self.clock = None
+    def _init_render(self):
+        if self.render_mode == 'human':
+            self.game.init_human_render()
+        else:
+            self.game.init_rgb_render()
+
+    def _make_info(self, info):
+        return {info: info}
+    
+    def _make_obs(self, obs):
+        return np.array(obs, dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -52,30 +64,29 @@ class ShootingGameEnv(gym.Env):
         if self.render_mode == "human":
             self._render_frame()
 
-        return obs, info
+        return self._make_obs(obs), self._make_info(info)
     
     def step(self, action):
-       
+        self.global_step+=1
+
         observation, reward, done, trunc, info = self.game.step(action)
 
         if self.render_mode == "human":
             self._render_frame()
 
-        return observation, reward, done, trunc, info
+        return self._make_obs(observation), reward, done, trunc, self._make_info(info)
     
     def render(self):
         if self.render_mode == "rgb_array":
             return self._render_frame()
 
     def _render_frame(self):
-        if self.render_init == False and self.render_mode == "human":
-            self.game.render_init()
-
         if self.render_mode == "human":
-            self.game.draw()
+            self.game.render_human()
 
-        else:  # rgb_array
-            print("add rbg mode xd")
+        else:
+            #rbga_arr = self.game.render_rbg()
+            return np.zeros([3,3,3], dtype=np.uint8)
 
     def close(self):
         print("add close func xd")

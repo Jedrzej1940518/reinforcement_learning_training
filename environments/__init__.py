@@ -9,5 +9,5 @@ register(
 register(
      id="environments/ShootingGameEnv-v0",
      entry_point="environments.envs:ShootingGameEnv",
-     max_episode_steps=20000,
+     max_episode_steps=5000,
 )

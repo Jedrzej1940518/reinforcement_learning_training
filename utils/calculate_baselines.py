@@ -16,8 +16,7 @@ def _run_episodes(env, episodes, policy):
     
     return cum_r/episodes #average rewards per episode
 
-def calculate_baselines(env, log_path, episodes=50):
-    max_actions = env.action_space.n
+def calculate_baselines(env, log_path, max_actions, episodes=50):
     print(f"Action space : 0:{max_actions-1}")
     print(f"Calculating baselines for {episodes} episodes, expecting {episodes + episodes*(max_actions+1)} runs")
     #random action

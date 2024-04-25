@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SFML/Graphics.hpp>
+#include <pybind11/numpy.h>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -24,10 +25,6 @@ float projectile_speed{ 45.f };
 int player_max_cooldown{ 45 };
 float player_radius{ 50.f };
 sf::Vector2f player_pos{ SCREEN_WIDTH / 2, SCREEN_HEIGHT - 100 };
-
-//game
-
-int EPISODE_MAX_STEPS = 10000;
 
 
 // Function to calculate the direction vector normalized
@@ -56,6 +53,9 @@ public:
 
     Target() {
         respawn();
+    }
+    auto& get_shape() {
+        return shape;
     }
 
     void update() {
@@ -109,6 +109,9 @@ public:
         position += direction * projectile_speed;
         shape.setPosition(position);
     }
+    auto& get_shape() {
+        return shape;
+    }
     void draw(sf::RenderWindow& window) const {
         window.draw(shape);
     }
@@ -150,6 +153,9 @@ public:
     void draw(sf::RenderWindow& window) const {
         window.draw(shape);
     }
+    auto& get_shape() {
+        return shape;
+    }
 
     bool shoot() {
         
@@ -177,12 +183,19 @@ struct Action {
 class ShootingGame
 {
 
+    enum RenderType{
+        HUMAN_RENDER =0,
+        RGB_RENDER =1,
+        NO_RENDER =2
+    };
+
     Target target{};
     Player player{};
     std::vector<Projectile> projectiles{};
     sf::RenderWindow* window{};
-    
-    int current_step{0};
+    sf::RenderTexture render_texture{};
+
+    RenderType render_type{NO_RENDER};
 
     int update()
     {
@@ -207,6 +220,7 @@ class ShootingGame
     }
 
     auto make_obs() {
+        
         return py::make_tuple( target.get_center().x, target.get_center().y, target.get_speed(), target.get_radius() );
     }
 
@@ -225,8 +239,24 @@ public:
     {
         return window;
     }
+    void init_rgb_render(){
 
-    void init_render(){
+        if (render_type != NO_RENDER){
+            cout<<"ERROR init_render called more than once"<<endl;
+            return;
+        }
+        render_type = RGB_RENDER;
+        cout<<"Initializing rbg rendering..."<<endl;
+        render_texture.create(SCREEN_WIDTH, SCREEN_HEIGHT);
+    }
+
+    void init_human_render(){
+        if (render_type != NO_RENDER){
+            cout<<"ERROR init_render called more than once"<<endl;
+            return;
+        }
+        render_type = HUMAN_RENDER;
+        cout<<"Initializing human rendering..."<<endl;
         window = new sf::RenderWindow{sf::VideoMode(SCREEN_WIDTH, SCREEN_HEIGHT), "SFML Target Shooting Game"};
         window ->setFramerateLimit(60);
     }
@@ -248,14 +278,16 @@ public:
             projectiles.push_back(Projectile(player.get_center(), calculate_direction(player.get_center(), action.shot_direction)));
         }
         int reward = update();
-        ++current_step;
-        bool trunc = current_step >= EPISODE_MAX_STEPS;
 
-        return py::make_tuple (make_obs(), reward, false, trunc, make_info() );
+        return py::make_tuple (make_obs(), reward, false, false, make_info() );
     }
 
-    void draw() const
+    void render_human()
     {
+        if (render_type != HUMAN_RENDER){
+            cout<<"ERROR initialize rendering first" <<endl;
+            return;
+        }
         window->clear();
 
         player.draw(*window);
@@ -265,6 +297,40 @@ public:
             p.draw(*window);
 
         window->display();
+
+    }
+
+    py::array_t<uint8_t> render_rbg()
+    {
+        render_texture.clear(sf::Color::Black); 
+        render_texture.draw(player.get_shape());
+        render_texture.draw(target.get_shape());
+
+        for (auto& p : projectiles)
+            render_texture.draw(p.get_shape());
+
+        render_texture.display();
+
+        const sf::Image& image = render_texture.getTexture().copyToImage();
+        const uint8_t* pixel_ptr = image.getPixelsPtr();
+        int channels = 4;
+        // int in_channels = 4;  // RGBA channels
+        // int out_channels = 3; //RGB
+
+        // uint8_t* rgb_ptr = new uint8_t [SCREEN_WIDTH * SCREEN_HEIGHT * out_channels];
+        // int cp_indx = 0;
+        // for (int i=0; i< SCREEN_WIDTH * SCREEN_HEIGHT * in_channels; ++i){
+        //     if ((i+1) % 4 == 0) //skip 4th channel
+        //         ++i;
+        //     rgb_ptr[cp_indx] = pixel_ptr[i];
+        //     ++cp_indx;
+        // }
+
+
+        // auto result = py::array_t<uint8_t>({SCREEN_WIDTH, SCREEN_HEIGHT, out_channels}, {out_channels, out_channels * SCREEN_WIDTH, 1}, rgb_ptr);
+        auto result = py::array_t<uint8_t>({SCREEN_WIDTH, SCREEN_HEIGHT, channels}, {channels, channels * SCREEN_WIDTH, 1}, pixel_ptr);
+        return result;
+
     }
 };
 
@@ -279,7 +345,7 @@ public:
     void play()
     {
         auto game = ShootingGame();
-        game.init_render();
+        game.init_human_render();
         auto window = game.get_window();
         while (window->isOpen()) {
             sf::Event event;
@@ -304,7 +370,7 @@ public:
             int reward = game.step(py::make_tuple(shoot, x, y))[1].cast<int>();
             if (reward)
                 cout << "reward " << reward <<endl;
-            game.draw();
+            game.render_human();
         }
 
     }

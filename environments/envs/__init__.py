@@ -1,2 +1,2 @@
 from environments.envs.basic_snake import SnakeEnv
-from environments.envs.cpp_envs.shooting_game.ShootingGameEnv import ShootingGameEnv
+from environments.envs.cpp_envs.shooting_game_base.shooting_game_env import ShootingGameEnv

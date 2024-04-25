@@ -117,8 +117,8 @@ class SimplePPO:
         transform_obs = lambda obs: self.translate_input(torch.tensor(obs, dtype=torch.float, device=device, requires_grad=False)) #turn to tensor and then apply translation
         env = gym.wrappers.TransformObservation(env, transform_obs)
         #env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = gym.wrappers.RecordVideo(env, f'{self.log_path}/videos', episode_trigger=lambda x : x % self.video_interval == 0, disable_logger=False)
-        env.metadata['render_fps'] = 60
+        #env = gym.wrappers.RecordVideo(env, f'{self.log_path}/videos', episode_trigger=lambda x : x % self.video_interval == 0, disable_logger=False)
+        #env.metadata['render_fps'] = 60
         return env
 
     #todo probably make this for N actors
@@ -185,7 +185,7 @@ class SimplePPO:
            
             #prepare tensors
             with torch.no_grad():
-                old_log_prob = torch.stack(actions_probs).squeeze()
+                old_log_prob = torch.stack(actions_probs)
                 obs      = torch.stack(observations)
                 obs_n = torch.stack(observations_n)
                 acts = torch.stack(actions)
@@ -223,8 +223,8 @@ class SimplePPO:
                 mean, std =  self.actor(obs)                                #todo probaby should use only indexes
                 normal_dist = torch.distributions.Normal(mean, std)
                 new_log_probs = normal_dist.log_prob(acts)
-                if self.actor.action_space > 1: # Sum log probabilities for multi-dimensional actions
-                    new_log_probs.sum(axis=-1)  
+                if self.actor.action_space > 1: # Sum log probabilities for multi-dimensional actionsdraw
+                    new_log_probs = new_log_probs.sum(axis=-1)  
 
                 debug_log(lambda: f"NEWLOG|epoch{k}:\n actions {acts}, old_log_probs {old_log_prob}, new_log_probs{new_log_probs}")
 

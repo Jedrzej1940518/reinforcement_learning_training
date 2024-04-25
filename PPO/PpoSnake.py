@@ -71,7 +71,7 @@ def write_baselines():
     calculate_baselines(env, log_path, 30)
 
 def main(): 
-    write_baselines()
+    #write_baselines()
     train()
 
 if __name__ == "__main__":

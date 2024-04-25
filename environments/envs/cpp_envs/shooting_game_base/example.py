@@ -1,8 +1,10 @@
-import shooting_game
+import shooting_game_env
 import random
 
+#cd build && cmake .. && make && mv shooting_game_env.cpython-310-x86_64-linux-gnu.so .. && cd ..
+
 def test():
-    game = shooting_game.ShootingGame()
+    game = shooting_game_env.ShootingGame()
  #   game.init_render()
     game.reset()
     done = False
@@ -26,4 +28,3 @@ def main():
 
 main()
 
-#cd build && cmake .. && make && mv shooting_game.cpython-310-x86_64-linux-gnu.so .. && cd .. && python example.py

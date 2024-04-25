@@ -17,11 +17,11 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 find_package(pybind11 REQUIRED)
 find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 
-pybind11_add_module(shooting_game ShootingGameModule.cpp) # or wherever your binding code is
+pybind11_add_module(shooting_game_module ShootingGameModule.cpp) # or wherever your binding code is
 
-target_link_libraries(shooting_game PRIVATE pybind11::embed sfml-graphics sfml-window sfml-system)
+target_link_libraries(shooting_game_module PRIVATE pybind11::embed sfml-graphics sfml-window sfml-system)
 
-set_target_properties(shooting_game PROPERTIES
+set_target_properties(shooting_game_module PROPERTIES
   CXX_STANDARD 17
   CXX_STANDARD_REQUIRED YES
 )
